@@ -16,24 +16,32 @@ from PyQt6.QtWidgets import (
     QTextEdit, QProgressBar, QMessageBox, QGroupBox, QFormLayout, QSystemTrayIcon, QMenu,
     QListWidget, QListWidgetItem
 )
-from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QObject
 
 from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
 
 
-class StderrCapture(io.StringIO):
+class StderrCapture(QObject):
     """Capture stderr and emit it as a signal."""
     output_signal = pyqtSignal(str)
     
+    def __init__(self):
+        super().__init__()
+        self.buffer = io.StringIO()
+    
     def write(self, message):
-        """Write to StringIO and emit signal."""
+        """Write to buffer and emit signal."""
         if message and message.strip():
             self.output_signal.emit(f"[stderr] {message.strip()}")
-        return super().write(message)
+        return self.buffer.write(message)
     
     def flush(self):
         """Flush the buffer."""
-        return super().flush()
+        return self.buffer.flush()
+    
+    def getvalue(self):
+        """Get buffer value."""
+        return self.buffer.getvalue()
 
 
 
