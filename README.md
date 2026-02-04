@@ -4,26 +4,29 @@ A simple command-line tool for transcribing audio and video files using OpenAI W
 
 ## Quick Start
 
+**Requirements:** Conda (Miniconda or Anaconda)
+
 ```bash
 cd /Users/andreas.gerhardsson/Sites/WhisperIT
 bash run.sh
 ```
 
-Then follow the interactive prompts to:
-1. Select your audio/video file
-2. Choose a model (recommended: `base`)
-3. Select language (recommended: auto-detect)
-4. Choose output directory
-5. Select output formats
+The script will:
+1. Create a conda environment with Python 3.11
+2. Install all dependencies
+3. Launch the GUI application
 
 ## Features
 
-- 📝 **Transcribe audio/video** to text
-- 🌍 **99+ languages** with auto-detection
-- 📊 **Multiple formats**: TXT, JSON, TSV, Summary JSON
-- ⚙️ **5 model sizes** (tiny to large)
-- 🎬 **13+ file formats** supported
-- 🚀 **One-command setup** with `bash run.sh`
+- 🖥️ **Modern GUI** - PyQt6-based graphical interface
+- 📁 **Batch Processing** - Transcribe multiple files simultaneously
+- 💤 **Background Transcription** - Continues during screen lock and minimized
+- 📝 **Accurate Transcription** - Using faster-whisper for optimal performance
+- 🌍 **99+ Languages** with auto-detection
+- 📊 **Multiple Formats** - TXT, JSON, TSV, Summary JSON
+- ⚙️ **5 Model Sizes** - tiny to large (choose speed vs accuracy)
+- 🎬 **13+ File Formats** - MP3, MP4, WAV, MKV, and more
+- 🚀 **One-Command Setup** - `bash run.sh` handles everything
 
 ## Supported Formats
 
@@ -50,18 +53,27 @@ Transcription generates up to 4 files:
 
 ## Requirements
 
-- Python 3.14+
+- **Conda** (Miniconda or Anaconda) - [Install here](https://docs.conda.io/projects/miniconda/en/latest/)
 - ~5-10 GB disk space (for model downloads)
 - 2+ GB RAM
 
 ## Installation
 
-The `bash run.sh` script handles everything:
-- Creates virtual environment
-- Installs dependencies
-- Launches the application
+The `bash run.sh` script handles everything automatically:
+- Checks for conda installation
+- Creates a `whisperit` conda environment with Python 3.11
+- Installs all dependencies from `requirements.txt`
+- Launches the PyQt6 GUI application
 
-No manual setup needed.
+**First time setup:**
+```bash
+bash run.sh
+```
+
+**Subsequent launches:**
+```bash
+bash run.sh  # Conda environment already exists, just activates and launches
+```
 
 ## Usage Example
 
@@ -70,18 +82,19 @@ $ bash run.sh
 
 WhisperIT - Audio/Video Transcription Application
 
-Step 1: Select audio/video file
-Enter path to audio/video file: ~/Downloads/meeting.mp3
-✓ Selected file
+Conda environment 'whisperit' activated
+Installing dependencies...
+✓ Ready! Starting WhisperIT...
 
-[Follow prompts for model, language, output directory, formats]
-
-Start transcription? (y/n): y
-
-Transcription in progress...
-✓ Transcription complete!
-✓ Output files saved to: ~/Transcriptions
+[PyQt6 GUI window opens]
 ```
+
+Then in the GUI:
+1. Click "Add Files..." to select audio/video files
+2. Configure model, language, and output directory
+3. Choose output formats (TXT, JSON, TSV)
+4. Click "Start Transcription"
+5. App can be minimized/closed - transcription continues in background
 
 ## Tips
 
