@@ -2,18 +2,20 @@
 WhisperIT - Audio/Video Transcription GUI Application
 A simple PyQt6-based graphical interface for transcribing audio and video files using OpenAI Whisper.
 Supports background transcription with screen lock and system tray integration.
+Allows transcribing multiple files simultaneously.
 """
 
 import sys
 import subprocess
 from pathlib import Path
+from collections import deque
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, QFileDialog,
-    QTextEdit, QProgressBar, QMessageBox, QGroupBox, QFormLayout, QSystemTrayIcon, QMenu
+    QTextEdit, QProgressBar, QMessageBox, QGroupBox, QFormLayout, QSystemTrayIcon, QMenu,
+    QListWidget, QListWidgetItem
 )
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtGui import QFont
 
 from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
 
@@ -21,17 +23,19 @@ from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
 class TranscriptionThread(QThread):
     """Worker thread for transcription to keep GUI responsive and continue during screen lock."""
     progress_signal = pyqtSignal(str)
+    file_progress_signal = pyqtSignal(str, str)  # file_path, message
     finished_signal = pyqtSignal(bool, str)
     
-    def __init__(self, worker, file_path, output_dir, model, language, formats):
+    def __init__(self, worker, file_queue, output_dir, model, language, formats):
         super().__init__()
         self.worker = worker
-        self.file_path = file_path
+        self.file_queue = file_queue
         self.output_dir = output_dir
         self.model = model
         self.language = language
         self.formats = formats
         self.prevent_sleep_process = None
+        self.should_stop = False
     
     def start_prevent_sleep(self):
         """Start process to prevent macOS from sleeping."""
@@ -59,36 +63,62 @@ class TranscriptionThread(QThread):
     
     def run(self):
         try:
-            self.progress_signal.emit("Starting transcription...")
+            if self.file_queue.empty():
+                self.finished_signal.emit(False, "No files to transcribe")
+                return
+            
+            self.progress_signal.emit(f"Starting transcription of {len(self.file_queue)} file(s)...")
             self.start_prevent_sleep()
             
-            success = self.worker.transcribe(
-                self.file_path,
-                self.output_dir,
-                self.model,
-                self.language,
-                self.formats
-            )
+            total_files = len(self.file_queue)
+            completed = 0
             
-            if success:
-                while self.worker.is_transcribing():
-                    self.progress_signal.emit("⏳ Transcription in progress...")
-                    self.msleep(500)
+            while not self.file_queue.empty() and not self.should_stop:
+                file_path = self.file_queue.popleft()
+                completed += 1
                 
-                self.progress_signal.emit("✓ Transcription complete!")
-                self.finished_signal.emit(True, f"Files saved to: {self.output_dir}")
+                self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] Processing: {Path(file_path).name}")
+                
+                try:
+                    success = self.worker.transcribe(
+                        file_path,
+                        self.output_dir,
+                        self.model,
+                        self.language,
+                        self.formats
+                    )
+                    
+                    if success:
+                        while self.worker.is_transcribing():
+                            self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ⏳ Transcribing: {Path(file_path).name}")
+                            self.msleep(500)
+                        
+                        self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ✓ Complete: {Path(file_path).name}")
+                    else:
+                        self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ❌ Failed: {Path(file_path).name}")
+                except Exception as e:
+                    self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ❌ Error: {str(e)}")
+            
+            if self.should_stop:
+                self.finished_signal.emit(False, "Transcription queue stopped by user")
             else:
-                self.finished_signal.emit(False, "Failed to start transcription")
+                self.progress_signal.emit(f"✓ All {completed} file(s) transcribed successfully!")
+                self.finished_signal.emit(True, f"All files saved to: {self.output_dir}")
         except Exception as e:
             self.finished_signal.emit(False, f"Error: {str(e)}")
         finally:
             self.stop_prevent_sleep()
+    
+    def stop_transcription(self):
+        """Stop the transcription queue."""
+        self.should_stop = True
 
 
 class WhisperITGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.worker = TranscriptionWorker(status_callback=self.update_status)
+        self.file_queue = deque()
         self.transcription_thread = None
         self.is_transcribing = False
         
@@ -98,105 +128,63 @@ class WhisperITGUI(QMainWindow):
         
         self.init_ui()
         self.setWindowTitle("WhisperIT - Audio/Video Transcription")
-        self.setGeometry(100, 100, 900, 800)
+        self.setGeometry(100, 100, 900, 900)
     
     def setup_tray(self):
         """Setup system tray icon and menu."""
         tray_menu = QMenu()
-        
         show_action = tray_menu.addAction("Show")
         show_action.triggered.connect(self.showNormal)
-        
         quit_action = tray_menu.addAction("Quit")
         quit_action.triggered.connect(self.quit_app)
-        
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.show()
-    
-    def changeEvent(self, event):
-        """Handle window state changes."""
-        if event.type() == 2:  # QEvent.WindowStateChange
-            if self.isMinimized() and self.is_transcribing:
-                self.hide()
-                self.tray_icon.showMessage(
-                    "WhisperIT",
-                    "Transcription continues in background\n(Click tray icon to show window)",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    5000
-                )
-                return
-        super().changeEvent(event)
-    
-    def closeEvent(self, event):
-        """Handle window close event."""
-        if self.is_transcribing:
-            reply = QMessageBox.question(
-                self,
-                "Transcription in Progress",
-                "Transcription is still running. Close anyway?\n(Transcription will continue in background)",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                self.hide()
-                event.ignore()
-            else:
-                event.ignore()
-        else:
-            event.accept()
     
     def quit_app(self):
         """Quit the application."""
         if self.is_transcribing:
             reply = QMessageBox.question(
                 self,
-                "Transcription in Progress",
-                "Transcription is still running. Really quit?\n(Transcription will be stopped)",
+                "Confirm Quit",
+                "Transcription in progress. Stop and quit?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            if reply == QMessageBox.StandardButton.Yes and self.transcription_thread:
+                self.transcription_thread.stop_transcription()
+                self.transcription_thread.wait()
         QApplication.quit()
     
+    def closeEvent(self, event):
+        """Minimize to tray instead of closing."""
+        if self.is_transcribing:
+            self.hide()
+            event.ignore()
+        else:
+            event.accept()
+    
+    def changeEvent(self, event):
+        """Minimize to tray when window is minimized."""
+        if event.type() == 3:  # WindowStateChange
+            if self.isMinimized() and self.is_transcribing:
+                self.hide()
+    
     def init_ui(self):
-        """Initialize the user interface."""
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        """Initialize the UI."""
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout()
         
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        # File selection group
+        main_layout.addWidget(self.create_file_selection())
         
-        # Title
-        title = QLabel("🎙️  WhisperIT - Audio/Video Transcription")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        main_layout.addWidget(title)
+        # Settings group
+        main_layout.addWidget(self.create_settings_group())
         
-        # Info label
-        info_label = QLabel("Background transcription enabled - continues even during screen lock")
-        info_font = QFont()
-        info_font.setPointSize(9)
-        info_font.setItalic(True)
-        info_label.setFont(info_font)
-        main_layout.addWidget(info_label)
+        # Formats group
+        main_layout.addWidget(self.create_formats_group())
         
-        # File Selection
-        file_group = self.create_file_selection()
-        main_layout.addWidget(file_group)
-        
-        # Settings Group
-        settings_group = self.create_settings_group()
-        main_layout.addWidget(settings_group)
-        
-        # Output Formats Group
-        formats_group = self.create_formats_group()
-        main_layout.addWidget(formats_group)
-        
-        # Progress and Status
-        progress_group = self.create_progress_group()
-        main_layout.addWidget(progress_group)
+        # Progress and status group
+        main_layout.addWidget(self.create_progress_group())
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -206,31 +194,54 @@ class WhisperITGUI(QMainWindow):
         self.start_btn.clicked.connect(self.start_transcription)
         button_layout.addWidget(self.start_btn)
         
-        clear_btn = QPushButton("Clear")
+        self.stop_btn = QPushButton("Stop Queue")
+        self.stop_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 10px;")
+        self.stop_btn.clicked.connect(self.stop_transcription)
+        self.stop_btn.setEnabled(False)
+        button_layout.addWidget(self.stop_btn)
+        
+        clear_btn = QPushButton("Clear All")
         clear_btn.clicked.connect(self.clear_form)
         button_layout.addWidget(clear_btn)
         
         main_layout.addLayout(button_layout)
         main_layout.addStretch()
+        
+        main_widget.setLayout(main_layout)
     
     def create_file_selection(self):
         """Create file selection group."""
-        group = QGroupBox("Step 1: Select Audio/Video File")
+        group = QGroupBox("Step 1: Select Audio/Video Files")
         layout = QVBoxLayout()
         
+        # Add files button
         file_layout = QHBoxLayout()
-        self.file_input = QLineEdit()
-        self.file_input.setPlaceholderText("Select an audio or video file...")
-        self.file_input.setReadOnly(True)
-        file_layout.addWidget(self.file_input)
+        add_files_btn = QPushButton("Add Files...")
+        add_files_btn.clicked.connect(self.browse_files)
+        file_layout.addWidget(add_files_btn)
         
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.browse_file)
-        file_layout.addWidget(browse_btn)
-        
+        self.file_count_label = QLabel("No files selected")
+        file_layout.addWidget(self.file_count_label)
+        file_layout.addStretch()
         layout.addLayout(file_layout)
+        
+        # File list
+        self.file_list = QListWidget()
+        self.file_list.setMaximumHeight(150)
+        layout.addWidget(QLabel("Selected files:"))
+        layout.addWidget(self.file_list)
+        
+        # Remove selected button
+        remove_layout = QHBoxLayout()
+        remove_btn = QPushButton("Remove Selected")
+        remove_btn.clicked.connect(self.remove_selected_files)
+        remove_layout.addWidget(remove_btn)
+        remove_layout.addStretch()
+        layout.addLayout(remove_layout)
+        
         group.setLayout(layout)
         return group
+
     
     def create_settings_group(self):
         """Create settings group."""
@@ -324,16 +335,43 @@ class WhisperITGUI(QMainWindow):
         group.setLayout(layout)
         return group
     
-    def browse_file(self):
-        """Browse for audio/video file."""
-        file_path, _ = QFileDialog.getOpenFileName(
+    def browse_files(self):
+        """Browse for multiple audio/video files."""
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Select Audio/Video File",
+            "Select Audio/Video Files",
             str(Path.home()),
             "Audio/Video Files (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.mp4 *.mkv *.mov *.avi *.flv *.wmv *.webm);;All Files (*)"
         )
-        if file_path:
-            self.file_input.setText(file_path)
+        if file_paths:
+            for file_path in file_paths:
+                if file_path not in self.file_queue:
+                    self.file_queue.append(file_path)
+                    item = QListWidgetItem(Path(file_path).name)
+                    item.setData(256, file_path)  # Store full path in custom data
+                    self.file_list.addItem(item)
+            
+            self.update_file_count()
+    
+    def remove_selected_files(self):
+        """Remove selected files from the queue."""
+        for item in self.file_list.selectedItems():
+            file_path = item.data(256)
+            self.file_list.takeItem(self.file_list.row(item))
+            if file_path in self.file_queue:
+                self.file_queue.remove(file_path)
+        
+        self.update_file_count()
+    
+    def update_file_count(self):
+        """Update the file count label."""
+        count = len(self.file_queue)
+        if count == 0:
+            self.file_count_label.setText("No files selected")
+        elif count == 1:
+            self.file_count_label.setText("1 file selected")
+        else:
+            self.file_count_label.setText(f"{count} files selected")
     
     def browse_output(self):
         """Browse for output directory."""
@@ -344,6 +382,7 @@ class WhisperITGUI(QMainWindow):
         )
         if directory:
             self.output_input.setText(directory)
+
     
     def get_selected_formats(self):
         """Get selected output formats."""
@@ -359,15 +398,17 @@ class WhisperITGUI(QMainWindow):
     def start_transcription(self):
         """Start the transcription process."""
         # Validate inputs
-        file_path = self.file_input.text()
-        if not file_path or not Path(file_path).exists():
-            QMessageBox.warning(self, "Error", "Please select a valid audio/video file.")
+        if len(self.file_queue) == 0:
+            QMessageBox.warning(self, "Error", "Please select at least one audio/video file.")
             return
         
         output_dir = self.output_input.text()
         if not output_dir:
             QMessageBox.warning(self, "Error", "Please specify an output directory.")
             return
+        
+        # Create output directory if it doesn't exist
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         
         # Get settings
         model = self.model_combo.currentText()
@@ -376,6 +417,7 @@ class WhisperITGUI(QMainWindow):
         
         # Disable button and show progress
         self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.status_text.clear()
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -384,23 +426,31 @@ class WhisperITGUI(QMainWindow):
         # Create and start transcription thread
         self.transcription_thread = TranscriptionThread(
             self.worker,
-            file_path,
+            self.file_queue.copy(),
             output_dir,
             model,
             language,
             formats
         )
         self.transcription_thread.progress_signal.connect(self.update_status)
+        self.transcription_thread.file_progress_signal.connect(self.update_file_status)
         self.transcription_thread.finished_signal.connect(self.on_transcription_finished)
         self.transcription_thread.start()
         
         # Show tray notification
         self.tray_icon.showMessage(
             "WhisperIT",
-            "Transcription started.\nApp can be minimized, closed, or screen locked.\nTranscription will continue in background.",
+            f"Transcription of {len(self.file_queue)} file(s) started.\nApp can be minimized, closed, or screen locked.\nTranscription will continue in background.",
             QSystemTrayIcon.MessageIcon.Information,
             7000
         )
+    
+    def stop_transcription(self):
+        """Stop the transcription queue."""
+        if self.transcription_thread:
+            self.transcription_thread.stop_transcription()
+            self.update_status("⏹️ Stopping transcription queue...")
+            self.stop_btn.setEnabled(False)
     
     def update_status(self, message):
         """Update status text."""
@@ -413,6 +463,10 @@ class WhisperITGUI(QMainWindow):
         self.status_text.verticalScrollBar().setValue(
             self.status_text.verticalScrollBar().maximum()
         )
+    
+    def update_file_status(self, file_path, message):
+        """Update status for a specific file."""
+        self.update_status(message)
     
     def on_transcription_finished(self, success, message):
         """Handle transcription completion."""
@@ -445,7 +499,8 @@ class WhisperITGUI(QMainWindow):
     
     def clear_form(self):
         """Clear all form fields."""
-        self.file_input.clear()
+        self.file_list.clear()
+        self.file_queue.clear()
         self.model_combo.setCurrentText('base')
         self.language_combo.setCurrentIndex(0)
         self.output_input.setText(str(Path.home() / 'Transcriptions'))
@@ -453,6 +508,7 @@ class WhisperITGUI(QMainWindow):
         self.json_check.setChecked(True)
         self.tsv_check.setChecked(True)
         self.status_text.clear()
+        self.update_file_count()
 
 
 def main():
