@@ -153,7 +153,8 @@ class TranscriptionThread(QThread):
 class WhisperITGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.worker = TranscriptionWorker(status_callback=self.update_status)
+        # Don't pass callback - threading issues with GUI updates from worker thread
+        self.worker = TranscriptionWorker(status_callback=None)
         self.file_queue = deque()
         self.transcription_thread = None
         self.is_transcribing = False
