@@ -85,6 +85,7 @@ class TranscriptionThread(QThread):
     """Worker thread for transcription to keep GUI responsive and continue during screen lock."""
     progress_signal = pyqtSignal(str)
     file_progress_signal = pyqtSignal(str, str)  # file_path, message
+    progress_bar_signal = pyqtSignal(int, int)  # current, total
     finished_signal = pyqtSignal(bool, str)
     
     def __init__(self, worker, file_queue, output_dir, model, language, formats):
@@ -138,7 +139,9 @@ class TranscriptionThread(QThread):
                 file_path = self.file_queue.popleft()
                 completed += 1
                 
-                self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] Processing: {Path(file_path).name}")
+                # Update progress bar
+                self.progress_bar_signal.emit(completed, total_files)
+                self.file_progress_signal.emit(file_path, f"Processing: {Path(file_path).name}")
                 
                 try:
                     success = self.worker.transcribe(
@@ -151,14 +154,13 @@ class TranscriptionThread(QThread):
                     
                     if success:
                         while self.worker.is_transcribing():
-                            self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ⏳ Transcribing: {Path(file_path).name}")
                             self.msleep(500)
                         
-                        self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ✓ Complete: {Path(file_path).name}")
+                        self.file_progress_signal.emit(file_path, f"✓ Complete: {Path(file_path).name}")
                     else:
-                        self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ❌ Failed: {Path(file_path).name}")
+                        self.file_progress_signal.emit(file_path, f"❌ Failed: {Path(file_path).name}")
                 except Exception as e:
-                    self.file_progress_signal.emit(file_path, f"[{completed}/{total_files}] ❌ Error: {str(e)}")
+                    self.file_progress_signal.emit(file_path, f"❌ Error: {str(e)}")
             
             if self.should_stop:
                 self.finished_signal.emit(False, "Transcription queue stopped by user")
@@ -547,6 +549,7 @@ class WhisperITGUI(QMainWindow):
         )
         self.transcription_thread.progress_signal.connect(self.update_status)
         self.transcription_thread.file_progress_signal.connect(self.update_file_status)
+        self.transcription_thread.progress_bar_signal.connect(self.update_progress_bar)
         self.transcription_thread.finished_signal.connect(self.on_transcription_finished)
         self.transcription_thread.start()
         
@@ -580,6 +583,12 @@ class WhisperITGUI(QMainWindow):
     def update_file_status(self, file_path, message):
         """Update status for a specific file."""
         self.update_status(message)
+    
+    def update_progress_bar(self, current, total):
+        """Update progress bar with current/total files."""
+        percentage = int((current / total) * 100)
+        self.progress_bar.setValue(percentage)
+        self.progress_bar.setFormat(f"{current}/{total} files ({percentage}%)")
     
     def on_transcription_finished(self, success, message):
         """Handle transcription completion."""
