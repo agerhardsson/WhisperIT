@@ -20,6 +20,42 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
 
 
+class DragDropListWidget(QListWidget):
+    """Custom QListWidget that supports drag-and-drop of files."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDefaultDropAction(1)  # CopyAction
+    
+    def dragEnterEvent(self, event):
+        """Accept drag events if they contain file URLs."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+    
+    def dragMoveEvent(self, event):
+        """Accept drag move events."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+    
+    def dropEvent(self, event):
+        """Handle dropped files."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            # Emit custom signal with file paths
+            file_paths = [url.toLocalFile() for url in event.mimeData().urls()]
+            self.files_dropped.emit(file_paths)
+        else:
+            super().dropEvent(event)
+    
+    # Signal to emit when files are dropped
+    files_dropped = pyqtSignal(list)
+
+
 class TranscriptionThread(QThread):
     """Worker thread for transcription to keep GUI responsive and continue during screen lock."""
     progress_signal = pyqtSignal(str)
@@ -225,10 +261,11 @@ class WhisperITGUI(QMainWindow):
         file_layout.addStretch()
         layout.addLayout(file_layout)
         
-        # File list
-        self.file_list = QListWidget()
+        # File list with drag-and-drop support
+        self.file_list = DragDropListWidget()
         self.file_list.setMaximumHeight(150)
-        layout.addWidget(QLabel("Selected files:"))
+        self.file_list.files_dropped.connect(self.on_files_dropped)
+        layout.addWidget(QLabel("Selected files (or drag & drop):"))
         layout.addWidget(self.file_list)
         
         # Remove selected button
@@ -344,13 +381,40 @@ class WhisperITGUI(QMainWindow):
             "Audio/Video Files (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.mp4 *.mkv *.mov *.avi *.flv *.wmv *.webm);;All Files (*)"
         )
         if file_paths:
-            for file_path in file_paths:
-                if file_path not in self.file_queue:
-                    self.file_queue.append(file_path)
-                    item = QListWidgetItem(Path(file_path).name)
-                    item.setData(256, file_path)  # Store full path in custom data
-                    self.file_list.addItem(item)
-            
+            self.add_files_to_queue(file_paths)
+    
+    def on_files_dropped(self, file_paths):
+        """Handle files dropped onto the file list."""
+        # Filter for supported formats
+        supported = []
+        for file_path in file_paths:
+            path_obj = Path(file_path)
+            # Check if it's a directory or a supported file
+            if path_obj.is_dir():
+                # Recursively add audio/video files from directory
+                for ext in ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.mp4', '.mkv', '.mov', '.avi', '.flv', '.wmv', '.webm']:
+                    supported.extend(path_obj.glob(f'*{ext}'))
+                    supported.extend(path_obj.glob(f'*{ext.upper()}'))
+            elif path_obj.suffix.lower() in ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.mp4', '.mkv', '.mov', '.avi', '.flv', '.wmv', '.webm']:
+                supported.append(file_path)
+        
+        if supported:
+            self.add_files_to_queue([str(f) for f in supported])
+        else:
+            QMessageBox.warning(self, "No Files", "No supported audio/video files found in the dropped items.")
+    
+    def add_files_to_queue(self, file_paths):
+        """Add files to the queue and display list."""
+        added_count = 0
+        for file_path in file_paths:
+            if file_path not in self.file_queue:
+                self.file_queue.append(file_path)
+                item = QListWidgetItem(Path(file_path).name)
+                item.setData(256, file_path)  # Store full path in custom data
+                self.file_list.addItem(item)
+                added_count += 1
+        
+        if added_count > 0:
             self.update_file_count()
     
     def remove_selected_files(self):
