@@ -146,8 +146,25 @@ class WhisperITGUI(QMainWindow):
         language_label = QLabel("Language:")
         self.language_combo = QComboBox()
         self.language_combo.addItem('Auto-detect', 'auto')
-        for code, name in list(self.worker.LANGUAGES.items())[:20]:  # Show first 20
-            self.language_combo.addItem(f"{name} ({code})", code)
+        
+        # Priority languages (most common)
+        priority_langs = ['en', 'sv', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'zh']
+        added = set()
+        
+        # Add priority languages first
+        for code in priority_langs:
+            if code in self.worker.LANGUAGES:
+                name = self.worker.LANGUAGES[code]
+                self.language_combo.addItem(f"{name} ({code})", code)
+                added.add(code)
+        
+        # Add remaining languages
+        for code, name in self.worker.LANGUAGES.items():
+            if code not in added:
+                self.language_combo.addItem(f"{name} ({code})", code)
+                added.add(code)
+                if len(added) >= 30:  # Limit to prevent huge dropdown
+                    break
         layout.addRow(language_label, self.language_combo)
         
         # Output directory
