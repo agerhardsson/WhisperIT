@@ -7,6 +7,7 @@ Allows transcribing multiple files simultaneously.
 
 import sys
 import subprocess
+import io
 from pathlib import Path
 from collections import deque
 from PyQt6.QtWidgets import (
@@ -18,6 +19,22 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
+
+
+class StderrCapture(io.StringIO):
+    """Capture stderr and emit it as a signal."""
+    output_signal = pyqtSignal(str)
+    
+    def write(self, message):
+        """Write to StringIO and emit signal."""
+        if message and message.strip():
+            self.output_signal.emit(f"[stderr] {message.strip()}")
+        return super().write(message)
+    
+    def flush(self):
+        """Flush the buffer."""
+        return super().flush()
+
 
 
 class DragDropListWidget(QListWidget):
@@ -151,19 +168,25 @@ class TranscriptionThread(QThread):
 
 
 class WhisperITGUI(QMainWindow):
-    def __init__(self):
+    def __init__(self, stderr_capture=None):
         super().__init__()
         # Don't pass callback - threading issues with GUI updates from worker thread
         self.worker = TranscriptionWorker(status_callback=None)
         self.file_queue = deque()
         self.transcription_thread = None
         self.is_transcribing = False
+        self.stderr_capture = stderr_capture
         
         # Setup system tray
         self.tray_icon = QSystemTrayIcon(self)
         self.setup_tray()
         
         self.init_ui()
+        
+        # Connect stderr capture if available
+        if self.stderr_capture:
+            self.stderr_capture.output_signal.connect(self.update_status)
+        
         self.setWindowTitle("WhisperIT - Audio/Video Transcription")
         self.setGeometry(100, 100, 900, 900)
     
@@ -600,10 +623,22 @@ def main():
         print("Please install it with: pip install -r requirements.txt")
         sys.exit(1)
     
+    # Create stderr capture before creating the app
+    stderr_capture = StderrCapture()
+    original_stderr = sys.stderr
+    
     app = QApplication(sys.argv)
-    window = WhisperITGUI()
+    window = WhisperITGUI(stderr_capture=stderr_capture)
+    
+    # Redirect stderr after window is created (so signal connections work)
+    sys.stderr = stderr_capture
+    
     window.show()
-    sys.exit(app.exec())
+    result = app.exec()
+    
+    # Restore stderr
+    sys.stderr = original_stderr
+    return result
 
 
 if __name__ == "__main__":
