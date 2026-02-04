@@ -1,0 +1,19 @@
+# WhisperIT - Audio/Video Transcription Application
+# Core transcription
+openai-whisper
+
+# Audio processing
+pydub
+
+# Utilities
+python-dotenv
+tqdm
+
+# Optional: faster-whisper support (more efficient than openai-whisper)
+# faster-whisper
+
+# Optional: whisper.cpp support
+# whispercpp
+
+# Note: GUI uses tkinter which comes built-in with Python
+# No additional GUI package needed!
