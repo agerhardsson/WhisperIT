@@ -63,7 +63,7 @@ class TranscriptionThread(QThread):
     
     def run(self):
         try:
-            if self.file_queue.empty():
+            if len(self.file_queue) == 0:
                 self.finished_signal.emit(False, "No files to transcribe")
                 return
             
@@ -73,7 +73,7 @@ class TranscriptionThread(QThread):
             total_files = len(self.file_queue)
             completed = 0
             
-            while not self.file_queue.empty() and not self.should_stop:
+            while len(self.file_queue) > 0 and not self.should_stop:
                 file_path = self.file_queue.popleft()
                 completed += 1
                 
