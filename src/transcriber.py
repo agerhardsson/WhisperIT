@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional, Callable, Dict, Any
 
 try:
-    import whisper
+    from faster_whisper import WhisperModel
     WHISPER_AVAILABLE = True
 except ImportError:
     WHISPER_AVAILABLE = False
@@ -187,22 +187,39 @@ class TranscriptionWorker:
         try:
             self._update_status(f"Loading model '{model}'...")
             
-            # Load the Whisper model
-            whisper_model = whisper.load_model(model)
+            # Load the faster-whisper model
+            whisper_model = WhisperModel(model, device="auto", compute_type="auto")
             self._update_status("Model loaded. Processing audio...")
             
             # Prepare language parameter
             language_param = None if language == 'auto' else language
             
-            # Run transcription
-            result = whisper_model.transcribe(
+            # Run transcription with faster-whisper
+            segments, info = whisper_model.transcribe(
                 audio=file_path,
                 language=language_param,
-                verbose=False
+                beam_size=5,
+                best_of=5
             )
             
             if not self.is_running:
                 return
+            
+            # Convert segments generator to list and build result dict
+            segments_list = list(segments)
+            result = {
+                'text': ' '.join([segment.text for segment in segments_list]),
+                'language': info.language,
+                'duration': info.duration,
+                'segments': [
+                    {
+                        'start': segment.start,
+                        'end': segment.end,
+                        'text': segment.text.strip()
+                    }
+                    for segment in segments_list
+                ]
+            }
             
             self._update_status("Generating output files...")
             
