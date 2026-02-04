@@ -5,6 +5,9 @@ openai-whisper
 # Audio processing
 pydub
 
+# GUI
+PyQt6
+
 # Utilities
 python-dotenv
 tqdm
@@ -14,6 +17,3 @@ tqdm
 
 # Optional: whisper.cpp support
 # whispercpp
-
-# Note: GUI uses tkinter which comes built-in with Python
-# No additional GUI package needed!

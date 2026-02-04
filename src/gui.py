@@ -1,287 +1,326 @@
 """
-WhisperIT - Audio/Video Transcription CLI Application
-A clean, simple command-line interface for transcribing audio and video files using OpenAI Whisper.
+WhisperIT - Audio/Video Transcription GUI Application
+A simple PyQt6-based graphical interface for transcribing audio and video files using OpenAI Whisper.
 """
 
 import sys
 from pathlib import Path
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, QFileDialog,
+    QTextEdit, QProgressBar, QMessageBox, QGroupBox, QFormLayout
+)
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtGui import QFont
+
 from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
-import time
 
 
-def print_header():
-    """Print application header."""
-    print("\n" + "="*70)
-    print("  🎙️  WHISPERIT - Audio/Video Transcription  🎙️  ")
-    print("="*70 + "\n")
-
-
-def select_file():
-    """Prompt user to select an audio/video file."""
-    while True:
-        try:
-            file_path = input("Enter path to audio/video file: ").strip()
-        except EOFError:
-            print("\n❌ ERROR: No input provided. Exiting.\n")
-            sys.exit(1)
-        
-        if not file_path:
-            print("❌ Please provide a file path.\n")
-            continue
-        
-        # Handle quoted paths
-        file_path = file_path.strip('"\'')
-        
-        path_obj = Path(file_path).expanduser()
-        
-        if not path_obj.exists():
-            print(f"❌ File not found: {file_path}\n")
-            continue
-        
-        return str(path_obj)
-
-
-def select_model():
-    """Prompt user to select a model."""
-    models = ['tiny', 'base', 'small', 'medium', 'large']
+class TranscriptionThread(QThread):
+    """Worker thread for transcription to keep GUI responsive."""
+    progress_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal(bool, str)
     
-    while True:
-        print("\nAvailable models:")
-        for i, model in enumerate(models, 1):
-            size_info = {
-                'tiny': '80MB - Fastest',
-                'base': '140MB - Balanced (Recommended)',
-                'small': '461MB - More accurate',
-                'medium': '1.5GB - High accuracy',
-                'large': '2.9GB - Highest accuracy'
-            }
-            print(f"  {i}. {model} - {size_info.get(model, '')}")
-        
-        choice = input("\nSelect model (1-5, or name): ").strip().lower()
-        
-        # Handle numeric choice
-        if choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(models):
-                return models[idx]
+    def __init__(self, worker, file_path, output_dir, model, language, formats):
+        super().__init__()
+        self.worker = worker
+        self.file_path = file_path
+        self.output_dir = output_dir
+        self.model = model
+        self.language = language
+        self.formats = formats
+    
+    def run(self):
+        try:
+            self.progress_signal.emit("Starting transcription...")
+            success = self.worker.transcribe(
+                self.file_path,
+                self.output_dir,
+                self.model,
+                self.language,
+                self.formats
+            )
+            
+            if success:
+                while self.worker.is_transcribing():
+                    self.progress_signal.emit("Transcription in progress...")
+                    self.msleep(500)
+                
+                self.progress_signal.emit("✓ Transcription complete!")
+                self.finished_signal.emit(True, f"Files saved to: {self.output_dir}")
             else:
-                print("❌ Invalid selection. Please choose 1-5.\n")
-                continue
-        
-        # Handle name choice
-        if choice in models:
-            return choice
-        
-        print("❌ Invalid model. Please choose from: tiny, base, small, medium, large\n")
+                self.finished_signal.emit(False, "Failed to start transcription")
+        except Exception as e:
+            self.finished_signal.emit(False, f"Error: {str(e)}")
 
 
-def select_language(worker):
-    """Prompt user to select a language."""
-    languages = list(worker.LANGUAGES.items())
+class WhisperITGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.worker = TranscriptionWorker(status_callback=self.update_status)
+        self.transcription_thread = None
+        self.init_ui()
+        self.setWindowTitle("WhisperIT - Audio/Video Transcription")
+        self.setGeometry(100, 100, 900, 800)
     
-    print(f"\n{len(languages)} languages available:")
-    print("  Option 1: Auto-detect (default) - Automatically detect language")
-    print("  Option 2: Enter language code (e.g., 'en', 'es', 'fr')")
-    print("  Option 3: Search for language name")
-    
-    try:
-        choice = input("\nSelect option (1-3) or enter language code: ").strip().lower()
-    except EOFError:
-        print("\n❌ ERROR: No input provided. Exiting.\n")
-        sys.exit(1)
-    
-    if choice == '1' or choice == 'auto':
-        return 'auto'
-    
-    elif choice == '3':
-        try:
-            search_term = input("Search for language: ").strip().lower()
-        except EOFError:
-            print("\n❌ ERROR: No input provided. Using auto-detect.\n")
-            return 'auto'
+    def init_ui(self):
+        """Initialize the user interface."""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
         
-        matches = [(k, v) for k, v in languages if search_term in v.lower()]
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(20, 20, 20, 20)
         
-        if not matches:
-            print(f"❌ No languages found matching '{search_term}'. Using auto-detect.\n")
-            return 'auto'
+        # Title
+        title = QLabel("🎙️  WhisperIT - Audio/Video Transcription")
+        title_font = QFont()
+        title_font.setPointSize(16)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        main_layout.addWidget(title)
         
-        if len(matches) == 1:
-            return matches[0][0]
+        # File Selection
+        file_group = self.create_file_selection()
+        main_layout.addWidget(file_group)
         
-        print(f"\nFound {len(matches)} matches:")
-        for i, (code, name) in enumerate(matches[:10], 1):
-            print(f"  {i}. {name} ({code})")
+        # Settings Group
+        settings_group = self.create_settings_group()
+        main_layout.addWidget(settings_group)
         
-        if len(matches) > 10:
-            print(f"  ... and {len(matches) - 10} more")
+        # Output Formats Group
+        formats_group = self.create_formats_group()
+        main_layout.addWidget(formats_group)
         
-        try:
-            sub_choice = input(f"\nSelect (1-{min(10, len(matches))}): ").strip()
-        except EOFError:
-            print("\nUsing auto-detect.\n")
-            return 'auto'
+        # Progress and Status
+        progress_group = self.create_progress_group()
+        main_layout.addWidget(progress_group)
         
-        if sub_choice.isdigit():
-            idx = int(sub_choice) - 1
-            if 0 <= idx < min(10, len(matches)):
-                return matches[idx][0]
+        # Buttons
+        button_layout = QHBoxLayout()
         
-        print("Using auto-detect.\n")
-        return 'auto'
+        self.start_btn = QPushButton("Start Transcription")
+        self.start_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px;")
+        self.start_btn.clicked.connect(self.start_transcription)
+        button_layout.addWidget(self.start_btn)
+        
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self.clear_form)
+        button_layout.addWidget(clear_btn)
+        
+        main_layout.addLayout(button_layout)
+        main_layout.addStretch()
     
-    # Try to use the input as a language code
-    if choice in worker.LANGUAGES:
-        return choice
+    def create_file_selection(self):
+        """Create file selection group."""
+        group = QGroupBox("Step 1: Select Audio/Video File")
+        layout = QVBoxLayout()
+        
+        file_layout = QHBoxLayout()
+        self.file_input = QLineEdit()
+        self.file_input.setPlaceholderText("Select an audio or video file...")
+        self.file_input.setReadOnly(True)
+        file_layout.addWidget(self.file_input)
+        
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self.browse_file)
+        file_layout.addWidget(browse_btn)
+        
+        layout.addLayout(file_layout)
+        group.setLayout(layout)
+        return group
     
-    # Try to find a matching language by name
-    for code, name in languages:
-        if name.lower() == choice:
-            return code
+    def create_settings_group(self):
+        """Create settings group."""
+        group = QGroupBox("Step 2: Configure Settings")
+        layout = QFormLayout()
+        
+        # Model selection
+        model_label = QLabel("Model:")
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(['tiny', 'base', 'small', 'medium', 'large'])
+        self.model_combo.setCurrentText('base')
+        layout.addRow(model_label, self.model_combo)
+        
+        # Language selection
+        language_label = QLabel("Language:")
+        self.language_combo = QComboBox()
+        self.language_combo.addItem('Auto-detect', 'auto')
+        for code, name in list(self.worker.LANGUAGES.items())[:20]:  # Show first 20
+            self.language_combo.addItem(f"{name} ({code})", code)
+        layout.addRow(language_label, self.language_combo)
+        
+        # Output directory
+        output_label = QLabel("Output Directory:")
+        output_layout = QHBoxLayout()
+        self.output_input = QLineEdit()
+        default_output = str(Path.home() / 'Transcriptions')
+        self.output_input.setText(default_output)
+        output_layout.addWidget(self.output_input)
+        
+        output_btn = QPushButton("Browse...")
+        output_btn.clicked.connect(self.browse_output)
+        output_layout.addWidget(output_btn)
+        
+        layout.addRow(output_label, output_layout)
+        
+        group.setLayout(layout)
+        return group
     
-    print(f"❌ Language '{choice}' not found. Using auto-detect.\n")
-    return 'auto'
-
-
-def select_output_dir():
-    """Prompt user to select output directory."""
-    default = str(Path.home() / 'Transcriptions')
+    def create_formats_group(self):
+        """Create output formats group."""
+        group = QGroupBox("Step 3: Select Output Formats")
+        layout = QHBoxLayout()
+        
+        self.txt_check = QCheckBox("TXT (Plain text)")
+        self.txt_check.setChecked(True)
+        layout.addWidget(self.txt_check)
+        
+        self.json_check = QCheckBox("JSON (Structured)")
+        self.json_check.setChecked(True)
+        layout.addWidget(self.json_check)
+        
+        self.tsv_check = QCheckBox("TSV (Timestamps)")
+        self.tsv_check.setChecked(True)
+        layout.addWidget(self.tsv_check)
+        
+        group.setLayout(layout)
+        return group
     
-    try:
-        user_input = input(f"\nOutput directory [{default}]: ").strip()
-    except EOFError:
-        print(f"Using default directory: {default}\n")
-        return default
+    def create_progress_group(self):
+        """Create progress and status group."""
+        group = QGroupBox("Status")
+        layout = QVBoxLayout()
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+        
+        self.status_text = QTextEdit()
+        self.status_text.setReadOnly(True)
+        self.status_text.setMaximumHeight(150)
+        layout.addWidget(self.status_text)
+        
+        group.setLayout(layout)
+        return group
     
-    if not user_input:
-        return default
+    def browse_file(self):
+        """Browse for audio/video file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Audio/Video File",
+            str(Path.home()),
+            "Audio/Video Files (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.mp4 *.mkv *.mov *.avi *.flv *.wmv *.webm);;All Files (*)"
+        )
+        if file_path:
+            self.file_input.setText(file_path)
     
-    output_path = Path(user_input).expanduser()
-    return str(output_path)
-
-
-def select_output_formats():
-    """Prompt user to select output formats."""
-    print("\nOutput formats:")
-    print("  1. TXT - Plain text transcript")
-    print("  2. JSON - Structured data with segments")
-    print("  3. TSV - Tab-separated with timestamps")
+    def browse_output(self):
+        """Browse for output directory."""
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Directory",
+            str(Path.home())
+        )
+        if directory:
+            self.output_input.setText(directory)
     
-    try:
-        choice = input("\nSelect formats (e.g., '1,2,3' or 'all') [1,2,3]: ").strip().lower()
-    except EOFError:
-        print("Using default formats: TXT, JSON, TSV\n")
-        return ['txt', 'json', 'tsv']
+    def get_selected_formats(self):
+        """Get selected output formats."""
+        formats = []
+        if self.txt_check.isChecked():
+            formats.append('txt')
+        if self.json_check.isChecked():
+            formats.append('json')
+        if self.tsv_check.isChecked():
+            formats.append('tsv')
+        return formats if formats else ['txt']
     
-    if not choice or choice == 'all':
-        return ['txt', 'json', 'tsv']
+    def start_transcription(self):
+        """Start the transcription process."""
+        # Validate inputs
+        file_path = self.file_input.text()
+        if not file_path or not Path(file_path).exists():
+            QMessageBox.warning(self, "Error", "Please select a valid audio/video file.")
+            return
+        
+        output_dir = self.output_input.text()
+        if not output_dir:
+            QMessageBox.warning(self, "Error", "Please specify an output directory.")
+            return
+        
+        # Get settings
+        model = self.model_combo.currentText()
+        language = self.language_combo.currentData()
+        formats = self.get_selected_formats()
+        
+        # Disable button and show progress
+        self.start_btn.setEnabled(False)
+        self.status_text.clear()
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        
+        # Create and start transcription thread
+        self.transcription_thread = TranscriptionThread(
+            self.worker,
+            file_path,
+            output_dir,
+            model,
+            language,
+            formats
+        )
+        self.transcription_thread.progress_signal.connect(self.update_status)
+        self.transcription_thread.finished_signal.connect(self.on_transcription_finished)
+        self.transcription_thread.start()
     
-    format_map = {'1': 'txt', '2': 'json', '3': 'tsv'}
-    formats = []
+    def update_status(self, message):
+        """Update status text."""
+        current = self.status_text.toPlainText()
+        if current:
+            self.status_text.setText(current + "\n" + message)
+        else:
+            self.status_text.setText(message)
+        # Auto-scroll to bottom
+        self.status_text.verticalScrollBar().setValue(
+            self.status_text.verticalScrollBar().maximum()
+        )
     
-    for item in choice.split(','):
-        item = item.strip()
-        if item in format_map:
-            formats.append(format_map[item])
+    def on_transcription_finished(self, success, message):
+        """Handle transcription completion."""
+        self.progress_bar.setVisible(False)
+        self.start_btn.setEnabled(True)
+        
+        if success:
+            QMessageBox.information(self, "Success", message)
+            self.update_status(message)
+        else:
+            QMessageBox.critical(self, "Error", message)
+            self.update_status(f"❌ {message}")
     
-    if not formats:
-        print("No valid formats selected. Using all formats.\n")
-        return ['txt', 'json', 'tsv']
-    
-    return formats
+    def clear_form(self):
+        """Clear all form fields."""
+        self.file_input.clear()
+        self.model_combo.setCurrentText('base')
+        self.language_combo.setCurrentIndex(0)
+        self.output_input.setText(str(Path.home() / 'Transcriptions'))
+        self.txt_check.setChecked(True)
+        self.json_check.setChecked(True)
+        self.tsv_check.setChecked(True)
+        self.status_text.clear()
 
 
 def main():
-    """Main application."""
-    print_header()
-    
-    # Initialize worker
-    worker = TranscriptionWorker(status_callback=print)
-    
+    """Main entry point."""
     if not WHISPER_AVAILABLE:
         print("❌ ERROR: OpenAI Whisper not installed!")
-        print("   Run: pip install -r requirements.txt\n")
+        print("Please install it with: pip install -r requirements.txt")
         sys.exit(1)
     
-    try:
-        # Get input from user
-        print("Step 1: Select audio/video file")
-        file_path = select_file()
-        
-        if not worker.is_supported_file(file_path):
-            print("\n❌ ERROR: File format not supported!")
-            print("   Supported: MP3, WAV, M4A, FLAC, OGG, AAC (audio) | MP4, MKV, MOV, AVI, FLV, WMV, WebM (video)\n")
-            sys.exit(1)
-        
-        print(f"\n✓ Selected: {Path(file_path).name}\n")
-        
-        # Get transcription settings
-        print("Step 2: Select transcription model")
-        model = select_model()
-        print(f"\n✓ Selected model: {model}\n")
-        
-        print("Step 3: Select language")
-        language = select_language(worker)
-        lang_display = "Auto-detect" if language == 'auto' else worker.LANGUAGES.get(language, language)
-        print(f"✓ Selected language: {lang_display}\n")
-        
-        print("Step 4: Select output directory")
-        output_dir = select_output_dir()
-        print(f"✓ Output directory: {output_dir}\n")
-        
-        print("Step 5: Select output formats")
-        output_formats = select_output_formats()
-        print(f"✓ Selected formats: {', '.join(output_formats)}\n")
-        
-        # Confirm settings
-        print("="*70)
-        print("Summary:")
-        print(f"  Input file:      {Path(file_path).name}")
-        print(f"  Model:           {model}")
-        print(f"  Language:        {lang_display}")
-        print(f"  Output dir:      {output_dir}")
-        print(f"  Formats:         {', '.join(output_formats)}")
-        print("="*70 + "\n")
-        
-        try:
-            confirm = input("Start transcription? (y/n): ").strip().lower()
-        except EOFError:
-            print("\n❌ ERROR: No input provided. Exiting.\n")
-            sys.exit(1)
-        
-        if confirm != 'y':
-            print("Cancelled.\n")
-            sys.exit(0)
-        
-        # Start transcription
-        print("\n" + "-"*70)
-        print("Starting transcription...")
-        print("-"*70 + "\n")
-        
-        success = worker.transcribe(file_path, output_dir, model, language, output_formats)
-        
-        if success:
-            # Wait for completion
-            print("\nTranscription in progress. This may take a while...")
-            while worker.is_transcribing():
-                time.sleep(1)
-            
-            print("\n" + "="*70)
-            print("✓ Transcription complete!")
-            print(f"✓ Output files saved to: {output_dir}")
-            print("="*70 + "\n")
-        else:
-            print("\n❌ Failed to start transcription.\n")
-            sys.exit(1)
-    
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Transcription cancelled by user.")
-        worker.stop()
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n❌ ERROR: {str(e)}\n")
-        sys.exit(1)
+    app = QApplication(sys.argv)
+    window = WhisperITGUI()
+    window.show()
+    sys.exit(app.exec())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
