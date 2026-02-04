@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QProgressBar, QMessageBox, QGroupBox, QFormLayout, QSystemTrayIcon, QMenu,
     QListWidget, QListWidgetItem
 )
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
 
@@ -26,7 +26,7 @@ class DragDropListWidget(QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setDefaultDropAction(1)  # CopyAction
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
     
     def dragEnterEvent(self, event):
         """Accept drag events if they contain file URLs."""
@@ -168,6 +168,23 @@ class WhisperITGUI(QMainWindow):
     
     def setup_tray(self):
         """Setup system tray icon and menu."""
+        # Create a simple pixmap icon if no system icon is available
+        from PyQt6.QtGui import QPixmap, QIcon
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        # Draw a simple circle to represent the icon
+        from PyQt6.QtGui import QPainter, QColor
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(70, 130, 180))  # Steel blue
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(2, 2, 12, 12)
+        painter.end()
+        
+        icon = QIcon(pixmap)
+        self.tray_icon.setIcon(icon)
+        
         tray_menu = QMenu()
         show_action = tray_menu.addAction("Show")
         show_action.triggered.connect(self.showNormal)
