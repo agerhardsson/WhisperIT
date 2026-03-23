@@ -1,4 +1,7 @@
+.DS_Store
 *mp3
 *wav
 *flac
 *venv
+
+__pycache__
