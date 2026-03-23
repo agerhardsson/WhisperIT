@@ -1,10 +1,10 @@
 # WhisperIT
 
-A simple command-line tool for transcribing audio and video files using OpenAI Whisper.
+A simple GUI for transcribing audio and video files using OpenAI Whisper.
 
 ## Quick Start
 
-**Requirements:** Conda (Miniconda or Anaconda)
+**Requirements:** Conda ([Miniconda or Anaconda](https://www.anaconda.com/docs/getting-started/miniconda/main))
 
 ```bash
 cd /Users/andreas.gerhardsson/Sites/WhisperIT
