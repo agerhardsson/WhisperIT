@@ -9,7 +9,7 @@ Transcribe audio and video files using a modern GUI or interactive CLI, powered 
 
 
 ```bash
-cd /Users/andreas.gerhardsson/Sites/WhisperIT
+cd <path>/WhisperIT
 ./run.sh setup      # One-time: create conda env and install dependencies
 ./run.sh gui        # Launch the GUI (default)
 ./run.sh cli        # Launch the interactive CLI
