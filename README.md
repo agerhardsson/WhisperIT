@@ -1,32 +1,38 @@
 # WhisperIT
 
-A simple GUI for transcribing audio and video files using OpenAI Whisper.
+
+Transcribe audio and video files using a modern GUI or interactive CLI, powered by faster-whisper.
 
 ## Quick Start
 
 **Requirements:** Conda ([Miniconda or Anaconda](https://www.anaconda.com/docs/getting-started/miniconda/main))
 
+
 ```bash
 cd /Users/andreas.gerhardsson/Sites/WhisperIT
-bash run.sh
+./run.sh setup      # One-time: create conda env and install dependencies
+./run.sh gui        # Launch the GUI (default)
+./run.sh cli        # Launch the interactive CLI
+./run.sh update     # Update dependencies
 ```
 
 The script will:
-1. Create a conda environment with Python 3.11
-2. Install all dependencies
-3. Launch the GUI application
+- Create a conda environment with Python 3.11 (if needed)
+- Install all dependencies
+- Launch the GUI or CLI as requested
 
 ## Features
 
 - 🖥️ **Modern GUI** - PyQt6-based graphical interface
+- 💻 **Interactive CLI** - Step-based terminal interface (no arguments needed)
 - 📁 **Batch Processing** - Transcribe multiple files simultaneously
 - 💤 **Background Transcription** - Continues during screen lock and minimized
 - 📝 **Accurate Transcription** - Using faster-whisper for optimal performance
 - 🌍 **99+ Languages** with auto-detection
-- 📊 **Multiple Formats** - TXT, JSON, TSV, Summary JSON
+- 📊 **Multiple Formats** - TXT, JSON, SRT, TSV, Summary JSON
 - ⚙️ **5 Model Sizes** - tiny to large (choose speed vs accuracy)
 - 🎬 **13+ File Formats** - MP3, MP4, WAV, MKV, and more
-- 🚀 **One-Command Setup** - `bash run.sh` handles everything
+- 🚀 **One-Command Setup** - `./run.sh setup` handles everything
 
 ## Supported Formats
 
@@ -77,24 +83,27 @@ bash run.sh  # Conda environment already exists, just activates and launches
 
 ## Usage Example
 
+
+### GUI (default)
 ```bash
-$ bash run.sh
-
-WhisperIT - Audio/Video Transcription Application
-
-Conda environment 'whisperit' activated
-Installing dependencies...
-✓ Ready! Starting WhisperIT...
-
-[PyQt6 GUI window opens]
+./run.sh gui
 ```
+Follow the on-screen instructions in the PyQt6 window.
 
-Then in the GUI:
-1. Click "Add Files..." to select audio/video files
-2. Configure model, language, and output directory
-3. Choose output formats (TXT, JSON, TSV)
-4. Click "Start Transcription"
-5. App can be minimized/closed - transcription continues in background
+### Interactive CLI
+```bash
+./run.sh cli
+```
+You will be guided step-by-step to select model, language, input/output folders, formats, and overwrite options.
+
+### Direct CLI (batch mode)
+```bash
+./run.sh cli -i <input_dir> -o <output_dir> [-m model] [-l lang] [-f formats] [--overwrite]
+```
+Example:
+```bash
+./run.sh cli -i ./audio -o ./transcripts -m base -l en -f txt srt --overwrite
+```
 
 ## Tips
 
@@ -109,10 +118,12 @@ Supports all major languages including English, Spanish, French, German, Italian
 
 ## Project Structure
 
+
 ```
 src/
-  transcriber.py    - Core transcription engine
-  gui.py            - Interactive CLI interface
+  transcriber.py    - Core transcription engine (faster-whisper)
+  gui.py            - PyQt6 GUI
+  cli.py            - Interactive and batch CLI
 run.sh              - Setup and launch script
 requirements.txt    - Python dependencies
 ```
@@ -123,4 +134,6 @@ requirements.txt    - Python dependencies
 
 ---
 
+
+---
 For detailed documentation, see the `docs` branch.
