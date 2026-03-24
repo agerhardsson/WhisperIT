@@ -135,6 +135,14 @@ class TranscriptionWorker:
         all_formats = self.SUPPORTED_FORMATS['audio'] + self.SUPPORTED_FORMATS['video']
         return ext in all_formats
     
+    @staticmethod
+    def format_timestamp(seconds):
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{h:02}:{m:02}:{s:02},{ms:03}"
+    
     def transcribe(self, file_path: str, output_dir: str, model: str = 'base',
                    language: str = 'auto', output_formats: list = None) -> bool:
         """
@@ -145,7 +153,7 @@ class TranscriptionWorker:
             output_dir: Directory to save output files
             model: Whisper model size ('tiny', 'base', 'small', 'medium', 'large')
             language: Language code (ISO 639-1) or 'auto' for auto-detection
-            output_formats: List of output formats ['txt', 'json', 'tsv']
+            output_formats: List of output formats ['txt', 'json', 'tsv', 'srt']
         
         Returns:
             True if transcription started successfully
@@ -163,7 +171,7 @@ class TranscriptionWorker:
             return False
         
         if output_formats is None:
-            output_formats = ['txt', 'json', 'tsv']
+            output_formats = ['txt', 'json', 'tsv', 'srt']
         
         # Stop any existing transcription
         if self.is_running:
@@ -249,6 +257,12 @@ class TranscriptionWorker:
                 output_paths['tsv'] = tsv_file
                 self._update_status(f"✓ Saved: {Path(tsv_file).name}")
             
+            if 'srt' in output_formats:
+                srt_file = os.path.join(output_dir, f"{input_filename}.srt")
+                self._save_srt(result, srt_file)
+                output_paths['srt'] = srt_file
+                self._update_status(f"✓ Saved: {Path(srt_file).name}")
+            
             # Save summary JSON
             summary_file = os.path.join(output_dir, f"{input_filename}_summary.json")
             self._save_summary(result, file_path, model, language, output_paths, summary_file)
@@ -288,6 +302,17 @@ class TranscriptionWorker:
                 end = segment.get('end', 0)
                 text = segment.get('text', '').strip()
                 f.write(f"{start:.2f}\t{end:.2f}\t{text}\n")
+    
+    @staticmethod
+    def _save_srt(result: Dict[str, Any], output_file: str):
+        """Save transcription as SRT subtitle file."""
+        segments = result.get('segments', [])
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for i, segment in enumerate(segments, 1):
+                start = TranscriptionWorker.format_timestamp(segment.get('start', 0))
+                end = TranscriptionWorker.format_timestamp(segment.get('end', 0))
+                text = segment.get('text', '').strip()
+                f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
     
     @staticmethod
     def _save_summary(result: Dict[str, Any], input_file: str, model: str,

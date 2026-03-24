@@ -403,6 +403,10 @@ class WhisperITGUI(QMainWindow):
         self.tsv_check.setChecked(True)
         layout.addWidget(self.tsv_check)
         
+        self.srt_check = QCheckBox("SRT (Subtitles)")
+        self.srt_check.setChecked(True)
+        layout.addWidget(self.srt_check)
+        
         group.setLayout(layout)
         return group
     
@@ -508,6 +512,8 @@ class WhisperITGUI(QMainWindow):
             formats.append('json')
         if self.tsv_check.isChecked():
             formats.append('tsv')
+        if self.srt_check.isChecked():
+            formats.append('srt')
         return formats if formats else ['txt']
     
     def start_transcription(self):
@@ -629,6 +635,7 @@ class WhisperITGUI(QMainWindow):
         self.txt_check.setChecked(True)
         self.json_check.setChecked(True)
         self.tsv_check.setChecked(True)
+        self.srt_check.setChecked(True)
         self.status_text.clear()
         self.update_file_count()
 
