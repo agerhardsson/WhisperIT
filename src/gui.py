@@ -14,9 +14,11 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, QFileDialog,
     QTextEdit, QProgressBar, QMessageBox, QGroupBox, QFormLayout, QSystemTrayIcon, QMenu,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup, QScrollArea, QStyle
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QObject
+from huggingface_hub import snapshot_download, try_to_load_from_cache
+from tqdm.auto import tqdm
 
 from .transcriber import TranscriptionWorker, WHISPER_AVAILABLE
 
@@ -177,7 +179,46 @@ class TranscriptionThread(QThread):
         self.should_stop = True
 
 
+class ModelDownloadThread(QThread):
+    finished_signal = pyqtSignal(str, bool, str)
+    progress_signal = pyqtSignal(str, int, int)
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def run(self):
+        repo_id = f"Systran/faster-whisper-{self.model}"
+
+        thread = self
+
+        class DownloadProgress(tqdm):
+            def __init__(self, *args, **kwargs):
+                kwargs["file"] = io.StringIO()
+                kwargs["disable"] = False
+                super().__init__(*args, **kwargs)
+
+            def update(self, n=1):
+                result = super().update(n)
+                thread.progress_signal.emit(self.desc or "Downloading model files", self.n, self.total or 0)
+                return result
+
+        try:
+            snapshot_download(repo_id=repo_id, tqdm_class=DownloadProgress)
+            self.finished_signal.emit(self.model, True, "Model downloaded and ready")
+        except Exception as error:
+            self.finished_signal.emit(self.model, False, str(error))
+
+
 class WhisperITGUI(QMainWindow):
+    MODEL_SIZES = {
+        "tiny": "~80 MB",
+        "base": "~140 MB",
+        "small": "~460 MB",
+        "medium": "~1.5 GB",
+        "large": "~2.9 GB",
+    }
+
     def __init__(self, stderr_capture=None):
         super().__init__()
         # Don't pass callback - threading issues with GUI updates from worker thread
@@ -186,6 +227,17 @@ class WhisperITGUI(QMainWindow):
         self.transcription_thread = None
         self.is_transcribing = False
         self.stderr_capture = stderr_capture
+        self.model_download_thread = None
+        self.downloading_model = None
+        self.start_after_download = False
+        self.selected_model = "base"
+        self.model_radios = {}
+        self.model_status_labels = {}
+        self.model_download_buttons = {}
+        self.model_downloaded = {
+            model: self.is_model_downloaded(model)
+            for model in TranscriptionWorker.AVAILABLE_MODELS
+        }
         
         # Setup system tray
         self.tray_icon = QSystemTrayIcon(self)
@@ -198,7 +250,8 @@ class WhisperITGUI(QMainWindow):
             self.stderr_capture.output_signal.connect(self.update_status)
         
         self.setWindowTitle("WhisperIT - Audio/Video Transcription")
-        self.setGeometry(100, 100, 900, 900)
+        self.setMinimumSize(680, 720)
+        self.resize(880, 900)
     
     def setup_tray(self):
         """Setup system tray icon and menu."""
@@ -229,21 +282,25 @@ class WhisperITGUI(QMainWindow):
     
     def quit_app(self):
         """Quit the application."""
-        if self.is_transcribing:
+        if self.is_transcribing or self.downloading_model is not None:
             reply = QMessageBox.question(
                 self,
                 "Confirm Quit",
-                "Transcription in progress. Stop and quit?",
+                "A background task is in progress. Quit after it stops? Model downloads cannot currently be canceled.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            if reply == QMessageBox.StandardButton.Yes and self.transcription_thread:
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            if self.transcription_thread and self.transcription_thread.isRunning():
                 self.transcription_thread.stop_transcription()
                 self.transcription_thread.wait()
+            if self.model_download_thread and self.model_download_thread.isRunning():
+                self.model_download_thread.wait()
         QApplication.quit()
     
     def closeEvent(self, event):
         """Minimize to tray instead of closing."""
-        if self.is_transcribing:
+        if self.is_transcribing or self.downloading_model is not None:
             self.hide()
             event.ignore()
         else:
@@ -259,42 +316,174 @@ class WhisperITGUI(QMainWindow):
         """Initialize the UI."""
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        main_layout = QVBoxLayout()
-        
-        # File selection group
-        main_layout.addWidget(self.create_file_selection())
-        
-        # Settings group
-        main_layout.addWidget(self.create_settings_group())
-        
-        # Formats group
-        main_layout.addWidget(self.create_formats_group())
-        
-        # Progress and status group
-        main_layout.addWidget(self.create_progress_group())
-        
-        # Buttons
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(20, 18, 20, 16)
+        main_layout.setSpacing(14)
+
+        header = QVBoxLayout()
+        title = QLabel("WhisperIT")
+        title.setObjectName("appTitle")
+        subtitle = QLabel("Transcribe audio and video, privately on your device.")
+        subtitle.setObjectName("subtitle")
+        header.addWidget(title)
+        header.addWidget(subtitle)
+        main_layout.addLayout(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(2, 2, 8, 2)
+        content_layout.setSpacing(12)
+        content_layout.addWidget(self.create_file_selection())
+        content_layout.addWidget(self.create_model_library())
+        content_layout.addWidget(self.create_settings_group())
+        content_layout.addWidget(self.create_formats_group())
+        content_layout.addWidget(self.create_progress_group())
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll, 1)
+
         button_layout = QHBoxLayout()
-        
+        self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton))
+        self.clear_btn.setObjectName("secondaryButton")
+        self.clear_btn.clicked.connect(self.clear_form)
+        button_layout.addWidget(self.clear_btn)
+        button_layout.addStretch()
+
         self.start_btn = QPushButton("Start Transcription")
-        self.start_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px;")
+        self.start_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.start_btn.setObjectName("primaryButton")
         self.start_btn.clicked.connect(self.start_transcription)
         button_layout.addWidget(self.start_btn)
-        
-        self.stop_btn = QPushButton("Stop Queue")
-        self.stop_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 10px;")
+
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        self.stop_btn.setObjectName("dangerButton")
         self.stop_btn.clicked.connect(self.stop_transcription)
         self.stop_btn.setEnabled(False)
         button_layout.addWidget(self.stop_btn)
-        
-        clear_btn = QPushButton("Clear All")
-        clear_btn.clicked.connect(self.clear_form)
-        button_layout.addWidget(clear_btn)
-        
         main_layout.addLayout(button_layout)
-        main_layout.addStretch()
-        
-        main_widget.setLayout(main_layout)
+
+        self.setStyleSheet("""
+            QWidget { color: #18212b; font-size: 13px; }
+            QMainWindow { background: #f4f6f8; }
+            QLabel#appTitle { font-size: 25px; font-weight: 700; color: #142b3b; }
+            QLabel#subtitle { color: #5c6b78; font-size: 13px; }
+            QGroupBox {
+                background: #ffffff; border: 1px solid #dce3e8; border-radius: 10px;
+                margin-top: 10px; padding: 12px; font-weight: 650; color: #203747;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; }
+            QPushButton {
+                background: #e9eef2; border: 1px solid #d3dce2; border-radius: 7px;
+                padding: 8px 12px; min-height: 20px; font-weight: 600;
+            }
+            QPushButton:hover { background: #dfe8ed; }
+            QPushButton:disabled { color: #8b969e; background: #f0f2f4; }
+            QPushButton#primaryButton { color: white; background: #087e78; border-color: #087e78; }
+            QPushButton#primaryButton:hover { background: #066b66; }
+            QPushButton#dangerButton { color: #9c3333; background: #fff4f2; border-color: #efd0ca; }
+            QPushButton#dangerButton:hover { background: #ffe7e2; }
+            QPushButton#secondaryButton { background: transparent; }
+            QLineEdit, QComboBox, QListWidget, QTextEdit {
+                background: #ffffff; border: 1px solid #d3dce2; border-radius: 6px; padding: 7px;
+                selection-background-color: #b9e5df;
+            }
+            QRadioButton { spacing: 8px; font-weight: 650; }
+            QCheckBox { spacing: 7px; }
+            QProgressBar { border: 0; border-radius: 4px; background: #e5ebef; min-height: 8px; max-height: 8px; }
+            QProgressBar::chunk { border-radius: 4px; background: #087e78; }
+            QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }
+            QPushButton:focus, QLineEdit:focus, QComboBox:focus, QListWidget:focus {
+                border: 2px solid #46aaa3;
+            }
+        """)
+
+    @staticmethod
+    def is_model_downloaded(model):
+        repo_id = f"Systran/faster-whisper-{model}"
+        required_files = ("config.json", "model.bin")
+        return all(
+            isinstance(path, str) and Path(path).is_file()
+            for path in (
+                try_to_load_from_cache(repo_id, filename)
+                for filename in required_files
+            )
+        )
+
+    def create_model_library(self):
+        group = QGroupBox("Choose a speech model")
+        layout = QVBoxLayout()
+        layout.setSpacing(5)
+        self.model_button_group = QButtonGroup(self)
+        self.model_button_group.setExclusive(True)
+
+        for model in TranscriptionWorker.AVAILABLE_MODELS:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(4, 4, 4, 4)
+            radio = QRadioButton(model.title())
+            radio.setChecked(model == "base")
+            radio.toggled.connect(lambda checked, name=model: self.select_model(name, checked))
+            self.model_button_group.addButton(radio)
+            self.model_radios[model] = radio
+            row_layout.addWidget(radio)
+
+            size_label = QLabel(self.MODEL_SIZES[model])
+            size_label.setMinimumWidth(75)
+            size_label.setStyleSheet("color: #657480;")
+            row_layout.addWidget(size_label)
+
+            status = QLabel()
+            status.setMinimumWidth(110)
+            status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.model_status_labels[model] = status
+            row_layout.addWidget(status)
+
+            download = QPushButton("Download")
+            download.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown))
+            download.setObjectName("secondaryButton")
+            download.clicked.connect(lambda checked=False, name=model: self.download_model(name))
+            self.model_download_buttons[model] = download
+            row_layout.addWidget(download)
+            layout.addWidget(row)
+
+        self.model_progress = QProgressBar()
+        self.model_progress.setRange(0, 0)
+        self.model_progress.setVisible(False)
+        layout.addWidget(self.model_progress)
+        self.model_download_message = QLabel("")
+        self.model_download_message.setStyleSheet("color: #5c6b78;")
+        self.model_download_message.setVisible(False)
+        layout.addWidget(self.model_download_message)
+        self.update_model_statuses()
+        group.setLayout(layout)
+        return group
+
+    def select_model(self, model, checked):
+        if checked:
+            self.selected_model = model
+
+    def update_model_statuses(self):
+        for model, label in self.model_status_labels.items():
+            downloading = model == self.downloading_model
+            downloaded = self.model_downloaded.get(model, False)
+            label.setText("Downloading…" if downloading else "Downloaded" if downloaded else "Not downloaded")
+            label.setStyleSheet(
+                "color: #087e78; font-weight: 650;" if downloaded
+                else "color: #a26523; font-weight: 600;" if not downloading
+                else "color: #42677b; font-weight: 600;"
+            )
+            button = self.model_download_buttons[model]
+            button.setText("Ready" if downloaded else "Downloading…" if downloading else "Download")
+            button.setEnabled(
+                not downloaded and not downloading
+                and self.downloading_model is None and not self.is_transcribing
+            )
+        if hasattr(self, "model_progress"):
+            self.model_progress.setVisible(self.downloading_model is not None)
     
     def create_file_selection(self):
         """Create file selection group."""
@@ -303,7 +492,9 @@ class WhisperITGUI(QMainWindow):
         
         # Add files button
         file_layout = QHBoxLayout()
-        add_files_btn = QPushButton("Add Files...")
+        add_files_btn = QPushButton("Add files")
+        add_files_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        add_files_btn.setObjectName("secondaryButton")
         add_files_btn.clicked.connect(self.browse_files)
         file_layout.addWidget(add_files_btn)
         
@@ -321,7 +512,9 @@ class WhisperITGUI(QMainWindow):
         
         # Remove selected button
         remove_layout = QHBoxLayout()
-        remove_btn = QPushButton("Remove Selected")
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        remove_btn.setObjectName("secondaryButton")
         remove_btn.clicked.connect(self.remove_selected_files)
         remove_layout.addWidget(remove_btn)
         remove_layout.addStretch()
@@ -335,13 +528,6 @@ class WhisperITGUI(QMainWindow):
         """Create settings group."""
         group = QGroupBox("Step 2: Configure Settings")
         layout = QFormLayout()
-        
-        # Model selection
-        model_label = QLabel("Model:")
-        self.model_combo = QComboBox()
-        self.model_combo.addItems(['tiny', 'base', 'small', 'medium', 'large'])
-        self.model_combo.setCurrentText('base')
-        layout.addRow(model_label, self.model_combo)
         
         # Language selection
         language_label = QLabel("Language:")
@@ -378,6 +564,8 @@ class WhisperITGUI(QMainWindow):
         output_layout.addWidget(self.output_input)
         
         output_btn = QPushButton("Browse...")
+        output_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        output_btn.setObjectName("secondaryButton")
         output_btn.clicked.connect(self.browse_output)
         output_layout.addWidget(output_btn)
         
@@ -502,6 +690,42 @@ class WhisperITGUI(QMainWindow):
         if directory:
             self.output_input.setText(directory)
 
+    def download_model(self, model):
+        if self.downloading_model is not None or self.is_transcribing:
+            return
+        self.downloading_model = model
+        self.update_model_statuses()
+        self.update_status(f"Downloading the {model} model. This may take several minutes...")
+        self.model_download_thread = ModelDownloadThread(model)
+        self.model_download_thread.progress_signal.connect(self.update_model_download_progress)
+        self.model_download_thread.finished_signal.connect(self.on_model_download_finished)
+        self.model_download_thread.start()
+
+    def update_model_download_progress(self, description, current, total):
+        self.model_download_message.setVisible(True)
+        self.model_download_message.setText(description)
+        if total > 0:
+            self.model_progress.setRange(0, total)
+            self.model_progress.setValue(current)
+        else:
+            self.model_progress.setRange(0, 0)
+
+    def on_model_download_finished(self, model, success, message):
+        self.downloading_model = None
+        self.model_download_message.setVisible(False)
+        self.model_progress.setRange(0, 0)
+        self.model_downloaded[model] = success and self.is_model_downloaded(model)
+        self.update_model_statuses()
+        resume_transcription = self.start_after_download and self.selected_model == model
+        self.start_after_download = False
+        if self.model_downloaded[model]:
+            self.update_status(f"{model.title()} model is downloaded and ready.")
+            if resume_transcription:
+                self.start_transcription()
+        else:
+            self.update_status(f"Could not download {model}: {message}")
+            QMessageBox.warning(self, "Model download failed", message)
+
     
     def get_selected_formats(self):
         """Get selected output formats."""
@@ -522,17 +746,38 @@ class WhisperITGUI(QMainWindow):
         if len(self.file_queue) == 0:
             QMessageBox.warning(self, "Error", "Please select at least one audio/video file.")
             return
-        
+
         output_dir = self.output_input.text()
         if not output_dir:
             QMessageBox.warning(self, "Error", "Please specify an output directory.")
+            return
+
+        model = self.selected_model
+        if self.downloading_model is not None:
+            if self.downloading_model == model:
+                self.start_after_download = True
+                self.update_status(f"Transcription will start when the {model} model finishes downloading.")
+            else:
+                QMessageBox.information(self, "Model download in progress", "Wait for the current model download to finish before starting transcription.")
+            return
+
+        if not self.model_downloaded.get(model, False):
+            reply = QMessageBox.question(
+                self,
+                "Model required",
+                f"The {model} model ({self.MODEL_SIZES[model]}) is not downloaded. Download it now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.start_after_download = True
+                self.download_model(model)
             return
         
         # Create output directory if it doesn't exist
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         
         # Get settings
-        model = self.model_combo.currentText()
         language = self.language_combo.currentData()
         formats = self.get_selected_formats()
         
@@ -543,6 +788,7 @@ class WhisperITGUI(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.is_transcribing = True
+        self.update_model_statuses()
         
         # Create and start transcription thread
         self.transcription_thread = TranscriptionThread(
@@ -601,6 +847,7 @@ class WhisperITGUI(QMainWindow):
         self.is_transcribing = False
         self.progress_bar.setVisible(False)
         self.start_btn.setEnabled(True)
+        self.update_model_statuses()
         
         if success:
             self.update_status(message)
@@ -629,7 +876,7 @@ class WhisperITGUI(QMainWindow):
         """Clear all form fields."""
         self.file_list.clear()
         self.file_queue.clear()
-        self.model_combo.setCurrentText('base')
+        self.model_radios['base'].setChecked(True)
         self.language_combo.setCurrentIndex(0)
         self.output_input.setText(str(Path.home() / 'Transcriptions'))
         self.txt_check.setChecked(True)
@@ -643,8 +890,8 @@ class WhisperITGUI(QMainWindow):
 def main():
     """Main entry point."""
     if not WHISPER_AVAILABLE:
-        print("❌ ERROR: OpenAI Whisper not installed!")
-        print("Please install it with: pip install -r requirements.txt")
+        print("ERROR: faster-whisper is not installed.")
+        print("Install dependencies with: uv sync")
         sys.exit(1)
     
     # Create stderr capture before creating the app
@@ -652,6 +899,7 @@ def main():
     original_stderr = sys.stderr
     
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     window = WhisperITGUI(stderr_capture=stderr_capture)
     
     # Redirect stderr after window is created (so signal connections work)
