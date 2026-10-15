@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QObject
 
-from transcriber import TranscriptionWorker, WHISPER_AVAILABLE
+from .transcriber import TranscriptionWorker, WHISPER_AVAILABLE
 
 
 class StderrCapture(QObject):

@@ -1,4 +1,3 @@
-echo ""
 #!/bin/bash
 # WhisperIT launcher and utility script
 # Usage: ./run.sh [setup|update|gui|cli|help] [args...]
@@ -8,28 +7,21 @@ set -e
 MODE=${1:-gui}
 shift || true
 
-ENV_NAME="whisperit"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "uv is required. Install it from https://docs.astral.sh/uv/getting-started/installation/" >&2
+    exit 1
+fi
 
 function setup_env() {
-    if ! command -v conda &> /dev/null; then
-        echo "Conda is not installed. Install Miniconda first."
-        exit 1
-    fi
-    if ! conda env list | grep -q "^${ENV_NAME}"; then
-        echo "Creating conda environment '${ENV_NAME}'..."
-        conda create -n "${ENV_NAME}" python=3.11 -y
-    fi
-    eval "$(conda shell.bash hook)"
-    conda activate "${ENV_NAME}"
-    pip install --upgrade pip
-    pip install -r requirements.txt
+    uv sync
 }
 
 function update_deps() {
-    eval "$(conda shell.bash hook)"
-    conda activate "${ENV_NAME}"
-    pip install --upgrade pip
-    pip install -r requirements.txt
+    uv lock --upgrade
+    uv sync
 }
 
 case "$MODE" in
@@ -40,19 +32,15 @@ case "$MODE" in
         update_deps
         ;;
     gui)
-        eval "$(conda shell.bash hook)"
-        conda activate "${ENV_NAME}"
-        python src/gui.py "$@"
+        uv run whisperit-gui "$@"
         ;;
     cli)
-        eval "$(conda shell.bash hook)"
-        conda activate "${ENV_NAME}"
-        python src/cli.py "$@"
+        uv run whisperit "$@"
         ;;
     help|--help|-h)
         echo "Usage: ./run.sh [setup|update|gui|cli|help] [args...]"
-        echo "  setup   Create conda env and install dependencies"
-        echo "  update  Update dependencies (pip install -r requirements.txt)"
+        echo "  setup   Create the uv environment and install dependencies"
+        echo "  update  Upgrade dependencies and refresh uv.lock"
         echo "  gui     Launch GUI (default)"
         echo "  cli     Run interactive CLI or pass arguments directly [see --help]"
         echo "  help    Show this message"

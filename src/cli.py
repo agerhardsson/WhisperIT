@@ -4,11 +4,9 @@ WhisperIT CLI - Batch audio/video transcription using faster-whisper
 """
 import argparse
 import os
-import sys
 from pathlib import Path
 from glob import glob
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from transcriber import TranscriptionWorker
+from .transcriber import TranscriptionWorker
 
 
 def select_from_list(prompt, options, default_index=0):
@@ -107,14 +105,7 @@ def main():
     parser.add_argument('-l', '--language', help='Language code')
     parser.add_argument('-f', '--formats', nargs='+', help='Output formats (e.g. txt json srt)')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite existing outputs')
-    parser.add_argument('--update', action='store_true', help='Update dependencies (pip install -r requirements.txt)')
     args = parser.parse_args()
-
-    if args.update:
-        print("Updating dependencies...")
-        os.system('pip install -r requirements.txt')
-        print("Update complete.")
-        return
 
     # If no CLI args, use interactive mode
     if not any([args.input, args.output, args.model, args.language, args.formats]):

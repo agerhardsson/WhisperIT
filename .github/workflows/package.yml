@@ -1,0 +1,87 @@
+name: Package WhisperIT
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-x64
+          - os: ubuntu-22.04
+            platform: linux
+          - os: windows-2022
+            platform: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install locked dependencies
+        run: uv sync --locked --group dev
+
+      - name: Build GUI bundle
+        run: >-
+          uv run pyinstaller --noconfirm --clean --onedir --windowed
+          --name WhisperIT --paths . --collect-all faster_whisper
+          --collect-all ctranslate2 --collect-all av gui_entry.py
+
+      - name: Build CLI bundle
+        run: >-
+          uv run pyinstaller --noconfirm --clean --onedir --console
+          --name whisperit-cli --paths . --collect-all faster_whisper
+          --collect-all ctranslate2 --collect-all av cli_entry.py
+
+      - name: Smoke test packaged CLI
+        if: runner.os != 'Windows'
+        run: dist/whisperit-cli/whisperit-cli --help
+
+      - name: Smoke test packaged CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: dist/whisperit-cli/whisperit-cli.exe --help
+
+      - name: Archive macOS app
+        if: runner.os == 'macOS'
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/WhisperIT.app dist/WhisperIT-${{ matrix.platform }}.zip
+          ditto -c -k --sequesterRsrc --keepParent dist/whisperit-cli dist/whisperit-cli-${{ matrix.platform }}.zip
+
+      - name: Archive Linux bundles
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf dist/WhisperIT-${{ matrix.platform }}.tar.gz -C dist WhisperIT
+          tar -czf dist/whisperit-cli-${{ matrix.platform }}.tar.gz -C dist whisperit-cli
+
+      - name: Archive Windows bundles
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/WhisperIT -DestinationPath dist/WhisperIT-${{ matrix.platform }}.zip
+          Compress-Archive -Path dist/whisperit-cli -DestinationPath dist/whisperit-cli-${{ matrix.platform }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WhisperIT-${{ matrix.platform }}
+          path: |
+            dist/WhisperIT-${{ matrix.platform }}.*
+            dist/whisperit-cli-${{ matrix.platform }}.*
+          if-no-files-found: error
