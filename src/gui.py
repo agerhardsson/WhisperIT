@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QProgressBar, QMessageBox, QGroupBox, QFormLayout, QSystemTrayIcon, QMenu,
     QListWidget, QListWidgetItem, QRadioButton, QButtonGroup, QScrollArea, QStyle
 )
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QObject
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QObject, QSettings
 from huggingface_hub import snapshot_download, try_to_load_from_cache
 from tqdm.auto import tqdm
 
@@ -231,6 +231,11 @@ class WhisperITGUI(QMainWindow):
         self.downloading_model = None
         self.start_after_download = False
         self.selected_model = "base"
+        self.settings = QSettings("WhisperIT", "WhisperIT")
+        self.theme = self.settings.value("theme", "system")
+        if self.theme not in ("system", "light", "dark"):
+            self.theme = "system"
+        self.is_dark_theme = False
         self.model_radios = {}
         self.model_status_labels = {}
         self.model_download_buttons = {}
@@ -320,13 +325,27 @@ class WhisperITGUI(QMainWindow):
         main_layout.setContentsMargins(20, 18, 20, 16)
         main_layout.setSpacing(14)
 
-        header = QVBoxLayout()
+        header = QHBoxLayout()
+        title_layout = QVBoxLayout()
         title = QLabel("WhisperIT")
         title.setObjectName("appTitle")
         subtitle = QLabel("Transcribe audio and video, privately on your device.")
         subtitle.setObjectName("subtitle")
-        header.addWidget(title)
-        header.addWidget(subtitle)
+        title_layout.addWidget(title)
+        title_layout.addWidget(subtitle)
+        header.addLayout(title_layout)
+        header.addStretch()
+        theme_label = QLabel("Appearance")
+        theme_label.setObjectName("themeLabel")
+        header.addWidget(theme_label)
+        self.theme_combo = QComboBox()
+        self.theme_combo.setObjectName("themeSelector")
+        self.theme_combo.addItem("System", "system")
+        self.theme_combo.addItem("Light", "light")
+        self.theme_combo.addItem("Dark", "dark")
+        self.theme_combo.setCurrentIndex(self.theme_combo.findData(self.theme))
+        self.theme_combo.currentIndexChanged.connect(self.change_theme)
+        header.addWidget(self.theme_combo)
         main_layout.addLayout(header)
 
         scroll = QScrollArea()
@@ -366,40 +385,86 @@ class WhisperITGUI(QMainWindow):
         button_layout.addWidget(self.stop_btn)
         main_layout.addLayout(button_layout)
 
-        self.setStyleSheet("""
-            QWidget { color: #18212b; font-size: 13px; }
-            QMainWindow { background: #f4f6f8; }
-            QLabel#appTitle { font-size: 25px; font-weight: 700; color: #142b3b; }
-            QLabel#subtitle { color: #5c6b78; font-size: 13px; }
-            QGroupBox {
-                background: #ffffff; border: 1px solid #dce3e8; border-radius: 10px;
-                margin-top: 10px; padding: 12px; font-weight: 650; color: #203747;
+        self.apply_theme()
+
+    def change_theme(self):
+        self.theme = self.theme_combo.currentData()
+        self.settings.setValue("theme", self.theme)
+        self.apply_theme()
+
+    def on_system_palette_changed(self, _palette):
+        if self.theme == "system":
+            self.apply_theme()
+
+    def apply_theme(self):
+        system_dark = QApplication.palette().color(self.backgroundRole()).lightness() < 128
+        self.is_dark_theme = system_dark if self.theme == "system" else self.theme == "dark"
+        if self.is_dark_theme:
+            colors = {
+                "window": "#171c22", "surface": "#202830", "input": "#151b21",
+                "text": "#e7edf1", "muted": "#a7b4be", "border": "#3b4852",
+                "hover": "#303c45", "selection": "#285b58", "accent": "#21a69c",
+                "accent_hover": "#18877f", "disabled": "#697780", "warning": "#e5ae68",
+                "danger_bg": "#3b2828", "danger_text": "#ffb6aa", "progress": "#313b43",
             }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; }
-            QPushButton {
-                background: #e9eef2; border: 1px solid #d3dce2; border-radius: 7px;
+        else:
+            colors = {
+                "window": "#f4f6f8", "surface": "#ffffff", "input": "#ffffff",
+                "text": "#18212b", "muted": "#5c6b78", "border": "#d3dce2",
+                "hover": "#dfe8ed", "selection": "#b9e5df", "accent": "#087e78",
+                "accent_hover": "#066b66", "disabled": "#8b969e", "warning": "#8a561a",
+                "danger_bg": "#fff4f2", "danger_text": "#9c3333", "progress": "#e5ebef",
+            }
+        self.setStyleSheet(f"""
+            QWidget {{ color: {colors['text']}; font-size: 13px; }}
+            QMainWindow {{ background: {colors['window']}; }}
+            QLabel#appTitle {{ font-size: 25px; font-weight: 700; color: {colors['text']}; }}
+            QLabel#subtitle, QLabel#themeLabel {{ color: {colors['muted']}; font-size: 13px; }}
+            QGroupBox {{
+                background: {colors['surface']}; border: 1px solid {colors['border']}; border-radius: 10px;
+                margin-top: 10px; padding: 12px; font-weight: 650; color: {colors['text']};
+            }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 5px; }}
+            QPushButton {{
+                background: {colors['surface']}; border: 1px solid {colors['border']}; border-radius: 7px;
                 padding: 8px 12px; min-height: 20px; font-weight: 600;
-            }
-            QPushButton:hover { background: #dfe8ed; }
-            QPushButton:disabled { color: #8b969e; background: #f0f2f4; }
-            QPushButton#primaryButton { color: white; background: #087e78; border-color: #087e78; }
-            QPushButton#primaryButton:hover { background: #066b66; }
-            QPushButton#dangerButton { color: #9c3333; background: #fff4f2; border-color: #efd0ca; }
-            QPushButton#dangerButton:hover { background: #ffe7e2; }
-            QPushButton#secondaryButton { background: transparent; }
-            QLineEdit, QComboBox, QListWidget, QTextEdit {
-                background: #ffffff; border: 1px solid #d3dce2; border-radius: 6px; padding: 7px;
-                selection-background-color: #b9e5df;
-            }
-            QRadioButton { spacing: 8px; font-weight: 650; }
-            QCheckBox { spacing: 7px; }
-            QProgressBar { border: 0; border-radius: 4px; background: #e5ebef; min-height: 8px; max-height: 8px; }
-            QProgressBar::chunk { border-radius: 4px; background: #087e78; }
-            QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }
-            QPushButton:focus, QLineEdit:focus, QComboBox:focus, QListWidget:focus {
-                border: 2px solid #46aaa3;
-            }
+            }}
+            QPushButton:hover {{ background: {colors['hover']}; }}
+            QPushButton:disabled {{ color: {colors['disabled']}; background: {colors['window']}; }}
+            QPushButton#primaryButton {{ color: white; background: {colors['accent']}; border-color: {colors['accent']}; }}
+            QPushButton#primaryButton:hover {{ background: {colors['accent_hover']}; }}
+            QPushButton#dangerButton {{ color: {colors['danger_text']}; background: {colors['danger_bg']}; border-color: {colors['border']}; }}
+            QPushButton#dangerButton:hover {{ background: {colors['hover']}; }}
+            QPushButton#secondaryButton {{ background: transparent; }}
+            QLineEdit, QComboBox, QListWidget, QTextEdit {{
+                color: {colors['text']}; background: {colors['input']};
+                border: 1px solid {colors['border']}; border-radius: 6px; padding: 7px;
+                selection-background-color: {colors['selection']}; selection-color: {colors['text']};
+            }}
+            QComboBox QAbstractItemView {{ color: {colors['text']}; background: {colors['surface']};
+                selection-color: {colors['text']}; selection-background-color: {colors['selection']};
+                border: 1px solid {colors['border']}; outline: 0; }}
+            QRadioButton {{ spacing: 8px; font-weight: 650; }}
+            QRadioButton::indicator {{ width: 17px; height: 17px; border-radius: 9px;
+                border: 2px solid {colors['muted']}; background: {colors['input']}; }}
+            QRadioButton::indicator:checked {{ border: 5px solid {colors['accent']}; background: {colors['input']}; }}
+            QCheckBox {{ spacing: 7px; }}
+            QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 4px;
+                border: 2px solid {colors['muted']}; background: {colors['input']}; }}
+            QCheckBox::indicator:hover {{ border-color: {colors['accent']}; }}
+            QCheckBox::indicator:checked {{ background: {colors['accent']}; border-color: {colors['accent']}; }}
+            QProgressBar {{ border: 0; border-radius: 4px; background: {colors['progress']}; min-height: 8px; max-height: 8px; }}
+            QProgressBar::chunk {{ border-radius: 4px; background: {colors['accent']}; }}
+            QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QPushButton:focus, QLineEdit:focus, QComboBox:focus, QListWidget:focus, QCheckBox:focus {{
+                border: 2px solid {colors['accent']};
+            }}
         """)
+        for label in self.findChildren(QLabel):
+            if label.objectName() in ("modelSizeLabel", "modelDownloadMessage"):
+                label.setStyleSheet(f"color: {colors['muted']};")
+        if hasattr(self, "model_status_labels"):
+            self.update_model_statuses()
 
     @staticmethod
     def is_model_downloaded(model):
@@ -432,8 +497,8 @@ class WhisperITGUI(QMainWindow):
             row_layout.addWidget(radio)
 
             size_label = QLabel(self.MODEL_SIZES[model])
+            size_label.setObjectName("modelSizeLabel")
             size_label.setMinimumWidth(75)
-            size_label.setStyleSheet("color: #657480;")
             row_layout.addWidget(size_label)
 
             status = QLabel()
@@ -455,7 +520,7 @@ class WhisperITGUI(QMainWindow):
         self.model_progress.setVisible(False)
         layout.addWidget(self.model_progress)
         self.model_download_message = QLabel("")
-        self.model_download_message.setStyleSheet("color: #5c6b78;")
+        self.model_download_message.setObjectName("modelDownloadMessage")
         self.model_download_message.setVisible(False)
         layout.addWidget(self.model_download_message)
         self.update_model_statuses()
@@ -467,14 +532,16 @@ class WhisperITGUI(QMainWindow):
             self.selected_model = model
 
     def update_model_statuses(self):
+        downloaded_color = "#51c4b8" if self.is_dark_theme else "#087e78"
+        unavailable_color = "#e5ae68" if self.is_dark_theme else "#8a561a"
         for model, label in self.model_status_labels.items():
             downloading = model == self.downloading_model
             downloaded = self.model_downloaded.get(model, False)
             label.setText("Downloading…" if downloading else "Downloaded" if downloaded else "Not downloaded")
             label.setStyleSheet(
-                "color: #087e78; font-weight: 650;" if downloaded
-                else "color: #a26523; font-weight: 600;" if not downloading
-                else "color: #42677b; font-weight: 600;"
+                f"color: {downloaded_color}; font-weight: 650;" if downloaded
+                else f"color: {unavailable_color}; font-weight: 600;" if not downloading
+                else f"color: {downloaded_color}; font-weight: 600;"
             )
             button = self.model_download_buttons[model]
             button.setText("Ready" if downloaded else "Downloading…" if downloading else "Download")
@@ -901,6 +968,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = WhisperITGUI(stderr_capture=stderr_capture)
+    app.paletteChanged.connect(window.on_system_palette_changed)
     
     # Redirect stderr after window is created (so signal connections work)
     sys.stderr = stderr_capture
